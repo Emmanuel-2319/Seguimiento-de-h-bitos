@@ -1,0 +1,8 @@
+{
+  "name": "Racha — Seguimiento de Hábitos",
+  "description": "Aplicación web de seguimiento de hábitos, rachas con días de gracia, mapa de consistencia y medallas de hitos.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
