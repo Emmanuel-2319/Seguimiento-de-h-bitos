@@ -5,6 +5,7 @@ import { Dashboard } from './components/Dashboard';
 import { HabitChatbot } from './components/HabitChatbot';
 import { HabitDetailModal } from './components/HabitDetailModal';
 import { HabitModal } from './components/HabitModal';
+import { InstallPromptBanner } from './components/InstallButton';
 import { Navbar } from './components/Navbar';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { SettingsView } from './components/SettingsView';
@@ -50,6 +51,7 @@ const RachaShell: React.FC = () => {
       <AuthModal />
       <ShareCardModal />
       <HabitChatbot />
+      <InstallPromptBanner />
       <OfflineIndicator />
 
       {toastMessage && (

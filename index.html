@@ -22,6 +22,20 @@
       href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
+    <script>
+      window.__rachaInstallPrompt = null;
+      window.__rachaAppInstalled = false;
+      window.addEventListener('beforeinstallprompt', function (e) {
+        e.preventDefault();
+        window.__rachaInstallPrompt = e;
+        window.dispatchEvent(new Event('racha-pwa-prompt-ready'));
+      });
+      window.addEventListener('appinstalled', function () {
+        window.__rachaInstallPrompt = null;
+        window.__rachaAppInstalled = true;
+        window.dispatchEvent(new Event('racha-pwa-installed'));
+      });
+    </script>
   </head>
   <body class="bg-black text-white antialiased selection:bg-[#d8f23a] selection:text-black">
     <div id="root"></div>

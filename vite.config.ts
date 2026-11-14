@@ -11,6 +11,7 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
+        useCredentials: true,
         includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'icon.svg'],
         manifest: {
           id: '/',
@@ -25,6 +26,8 @@ export default defineConfig(() => {
           start_url: '/',
           scope: '/',
           lang: 'es-ES',
+          prefer_related_applications: false,
+          categories: ['productivity', 'lifestyle'],
           icons: [
             {
               src: '/pwa-192x192.png',
@@ -73,7 +76,7 @@ export default defineConfig(() => {
         },
         devOptions: {
           enabled: true,
-          type: 'module',
+          type: 'classic',
         },
       }),
     ],
