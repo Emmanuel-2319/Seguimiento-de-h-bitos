@@ -122,7 +122,9 @@ export const KpiCards: React.FC = () => {
                 key={medal.days}
                 title={
                   medal.unlocked
-                    ? `Desbloqueada (${medal.label}) — ${medal.unlockedBy}`
+                    ? `Desbloqueada (${medal.label}) — ${medal.unlockedBy}${
+                        medal.unlockedDate ? ` · ${medal.unlockedDate}` : ''
+                      }`
                     : `Bloqueada: alcanza ${medal.label}`
                 }
                 className={`flex items-center gap-1.5 px-2 py-1 rounded-lg border transition-colors ${
@@ -138,7 +140,16 @@ export const KpiCards: React.FC = () => {
           })}
         </div>
 
-        <p className="text-xs text-[#8a8a8a]">Hitos 7, 30 y 100 días</p>
+        <p className="text-xs text-[#8a8a8a] truncate tabular-nums">
+          {(() => {
+            const latest = globalStats.medals
+              .filter((m) => m.unlocked && m.unlockedDate)
+              .sort((a, b) => (b.unlockedDate || '').localeCompare(a.unlockedDate || ''))[0];
+            return latest
+              ? `Última: ${latest.days}d el ${latest.unlockedDate}`
+              : 'Hitos 7, 30 y 100 días';
+          })()}
+        </p>
       </div>
     </section>
   );

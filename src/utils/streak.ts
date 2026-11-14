@@ -8,6 +8,9 @@ import type {
   LocalDate,
   MedalDays,
   MedalStatus,
+  StreakMilestoneEvent,
+  StreakMilestoneTimelineData,
+  UpcomingMilestone,
 } from '../types';
 import {
   addDays,
@@ -16,10 +19,10 @@ import {
   isExpectedOccurrence,
 } from './date';
 
-const MEDAL_MILESTONES: Array<{ days: MedalDays; label: string }> = [
-  { days: 7, label: '7 días continuos' },
-  { days: 30, label: '30 días continuos' },
-  { days: 100, label: '100 días continuos' },
+const MEDAL_MILESTONES: Array<{ days: MedalDays; label: string; title: string }> = [
+  { days: 7, label: '7 días continuos', title: 'Constancia Inicial · 7 días' },
+  { days: 30, label: '30 días continuos', title: 'Disciplina Consolidada · 30 días' },
+  { days: 100, label: '100 días continuos', title: 'Maestría Inquebrantable · 100 días' },
 ];
 
 /**
@@ -48,7 +51,7 @@ export function calculateHabitStats(
     let cursor = entity.startDate;
     let safety = 0;
     while (cursor <= effectiveEnd && safety < 3650) {
-      if (isExpectedOccurrence(cursor, entity.cadence, entity.startDate, entity.endDate)) {
+      if (isExpectedOccurrence(cursor, entity.cadence, entity.startDate, entity.endDate, entity.customDays)) {
         expectedDates.push(cursor);
       }
       cursor = addDays(cursor, 1);
@@ -126,6 +129,14 @@ export function calculateHabitStats(
       date,
       status: act?.status ?? ('vacio' as const),
       value: act?.value ?? 0,
+      expected: isExpectedOccurrence(
+        date,
+        entity.cadence,
+        entity.startDate,
+        entity.endDate,
+        entity.customDays
+      ),
+      note: act?.note,
     };
   });
 
@@ -174,14 +185,20 @@ export function calculateGlobalStats(
   const activeEntities = entities.filter(
     (e) => e.startDate <= today && (!e.endDate || e.endDate >= today)
   );
+  const expectedTodayEntities = activeEntities.filter((e) =>
+    isExpectedOccurrence(today, e.cadence, e.startDate, e.endDate, e.customDays)
+  );
+  const denominatorEntities =
+    expectedTodayEntities.length > 0 ? expectedTodayEntities : activeEntities;
+
   const todayCompletedCount = statsList.filter(
     ({ entity, stats }) =>
-      activeEntities.some((ae) => ae.id === entity.id) && stats.todayStatus === 'hecho'
+      denominatorEntities.some((ae) => ae.id === entity.id) && stats.todayStatus === 'hecho'
   ).length;
 
   const todayCompletionPct =
-    activeEntities.length > 0
-      ? Math.round((todayCompletedCount / activeEntities.length) * 100)
+    denominatorEntities.length > 0
+      ? Math.round((todayCompletedCount / denominatorEntities.length) * 100)
       : 0;
 
   const categoryCounts: Record<HabitCategory, number> = {
@@ -196,13 +213,19 @@ export function calculateGlobalStats(
     activeCategorySet.add(entity.category);
   }
 
+  const timeline = calculateStreakMilestoneTimeline(entities, activities, today);
+
   const medals: MedalStatus[] = MEDAL_MILESTONES.map((milestone) => {
-    const winner = statsList.find(({ stats }) => stats.bestStreak >= milestone.days);
+    const firstEvent = timeline.events
+      .filter((ev) => ev.days === milestone.days)
+      .sort((a, b) => a.unlockedDate.localeCompare(b.unlockedDate))[0];
+    const fallbackWinner = statsList.find(({ stats }) => stats.bestStreak >= milestone.days);
     return {
       days: milestone.days,
       label: milestone.label,
-      unlocked: Boolean(winner),
-      unlockedBy: winner?.entity.name,
+      unlocked: Boolean(firstEvent || fallbackWinner),
+      unlockedBy: firstEvent?.habitName ?? fallbackWinner?.entity.name,
+      unlockedDate: firstEvent?.unlockedDate,
     };
   });
 
@@ -345,15 +368,105 @@ function shiftMonth(year: number, monthZeroBased: number, deltaMonths: number): 
   return { year: targetYear, month: targetMonth, key, label, shortLabel };
 }
 
+export type ProgressRangeDays = 30 | 90 | 180 | 365;
+
+export interface ProgressOverviewOptions {
+  rangeDays?: ProgressRangeDays;
+  category?: 'todos' | HabitCategory;
+  entityId?: string;
+}
+
 /**
- * Computes the day-by-day sum of active streaks across all habits over the last 3 months
- * plus normalized day-of-month overlay and monthly comparison summaries.
+ * Returns true if a specific expected date <= today was protected by the habit's graceDays
+ * (i.e. not marked 'hecho' while an active streak was preserved across it).
+ */
+export function wasDayProtectedByGrace(
+  entity: Entity,
+  activities: Activity[],
+  date: LocalDate,
+  today: LocalDate
+): boolean {
+  if (entity.graceDays <= 0 || date > today || date < entity.startDate) return false;
+  if (!isExpectedOccurrence(date, entity.cadence, entity.startDate, entity.endDate, entity.customDays)) {
+    return false;
+  }
+
+  const byDate = new Map<LocalDate, Activity>();
+  for (const act of activities) {
+    if (act.entityId === entity.id) {
+      byDate.set(act.date, act);
+    }
+  }
+  if (byDate.get(date)?.status === 'hecho') return false;
+
+  const effectiveEnd = entity.endDate && entity.endDate < today ? entity.endDate : today;
+  const expectedDates: LocalDate[] = [];
+  let cursor = entity.startDate;
+  let safety = 0;
+  while (cursor <= effectiveEnd && safety < 3650) {
+    if (isExpectedOccurrence(cursor, entity.cadence, entity.startDate, entity.endDate, entity.customDays)) {
+      expectedDates.push(cursor);
+    }
+    cursor = addDays(cursor, 1);
+    safety++;
+  }
+
+  let graceRemaining = Math.max(0, entity.graceDays);
+  let activeStreak = 0;
+
+  for (let i = expectedDates.length - 1; i >= 0; i--) {
+    const d = expectedDates[i];
+    const act = byDate.get(d);
+    if (act?.status === 'hecho') {
+      activeStreak += 1;
+    } else if (d === today && graceRemaining > 0) {
+      if (d === date) {
+        const hasEarlier =
+          i > 0 &&
+          expectedDates
+            .slice(Math.max(0, i - graceRemaining), i)
+            .some((prevD) => byDate.get(prevD)?.status === 'hecho');
+        return hasEarlier || activeStreak > 0;
+      }
+      graceRemaining -= 1;
+    } else if (graceRemaining > 0) {
+      const hasEarlierCompletion =
+        i > 0 &&
+        expectedDates
+          .slice(Math.max(0, i - graceRemaining), i)
+          .some((prevD) => byDate.get(prevD)?.status === 'hecho');
+      if (hasEarlierCompletion) {
+        if (d === date) return true;
+        graceRemaining -= 1;
+      } else {
+        break;
+      }
+    } else {
+      break;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Computes the day-by-day sum of active streaks across filtered habits over the chosen window
+ * (30d / 90d / 180d / 365d) plus normalized day-of-month overlay and monthly comparison summaries.
  */
 export function calculateStreakProgressOverview(
   entities: Entity[],
   activities: Activity[],
-  today: LocalDate
+  today: LocalDate,
+  options?: ProgressOverviewOptions
 ): StreakProgressOverviewData {
+  const filteredEntities = entities.filter((e) => {
+    if (options?.entityId) return e.id === options.entityId;
+    if (options?.category && options.category !== 'todos') {
+      return e.category === options.category;
+    }
+    return true;
+  });
+
   const todayYear = Number(today.slice(0, 4));
   const todayMonth = Number(today.slice(5, 7)) - 1;
 
@@ -363,38 +476,80 @@ export function calculateStreakProgressOverview(
     shiftMonth(todayYear, todayMonth, 0),
   ];
 
-  const startDate: LocalDate = `${months[0].key}-01`;
-  const dailySeries: DailyStreakPoint[] = [];
+  const threeMonthStart: LocalDate = `${months[0].key}-01`;
+  const rangeDays = options?.rangeDays ?? 90;
+  const rangeStart = addDays(today, -(rangeDays - 1));
+  const earliestNeeded = rangeStart < threeMonthStart ? rangeStart : threeMonthStart;
 
-  // Pre-index activities by entity+date for fast lookup
-  const actMap = new Map<string, Activity>();
+  // Pre-index activities by entityId -> Map<date, Activity>
+  const actByEntity = new Map<string, Map<LocalDate, Activity>>();
   for (const act of activities) {
-    actMap.set(`${act.entityId}::${act.date}`, act);
+    let map = actByEntity.get(act.entityId);
+    if (!map) {
+      map = new Map<LocalDate, Activity>();
+      actByEntity.set(act.entityId, map);
+    }
+    map.set(act.date, act);
   }
 
-  let cursor = startDate;
+  // Precompute per-habit daily streak map forward from entity.startDate in O(days)
+  const habitStreakMaps = new Map<string, Map<LocalDate, number>>();
+  for (const entity of filteredEntities) {
+    const map = new Map<LocalDate, number>();
+    habitStreakMaps.set(entity.id, map);
+    if (entity.startDate > today) continue;
+
+    const actMap = actByEntity.get(entity.id) ?? new Map<LocalDate, Activity>();
+    const effectiveEnd = entity.endDate && entity.endDate < today ? entity.endDate : today;
+    let cursor = entity.startDate;
+    let running = 0;
+    let graceLeft = Math.max(0, entity.graceDays);
+    let safety = 0;
+
+    while (cursor <= effectiveEnd && safety < 3650) {
+      if (isExpectedOccurrence(cursor, entity.cadence, entity.startDate, entity.endDate, entity.customDays)) {
+        const act = actMap.get(cursor);
+        if (act?.status === 'hecho') {
+          running += 1;
+          graceLeft = Math.max(0, entity.graceDays);
+        } else if (running > 0 && graceLeft > 0) {
+          graceLeft -= 1;
+        } else {
+          running = 0;
+          graceLeft = Math.max(0, entity.graceDays);
+        }
+      }
+      if (cursor >= earliestNeeded) {
+        map.set(cursor, running);
+      }
+      cursor = addDays(cursor, 1);
+      safety++;
+    }
+  }
+
+  const allSeries: DailyStreakPoint[] = [];
+  let cursor = earliestNeeded;
   let safety = 0;
-  while (cursor <= today && safety < 140) {
+  while (cursor <= today && safety < 420) {
     let totalStreakSum = 0;
     let completedCount = 0;
     let activeCount = 0;
 
-    for (const entity of entities) {
+    for (const entity of filteredEntities) {
       if (entity.startDate > cursor || (entity.endDate && entity.endDate < cursor)) {
         continue;
       }
       activeCount += 1;
-      const actToday = actMap.get(`${entity.id}::${cursor}`);
+      const actToday = actByEntity.get(entity.id)?.get(cursor);
       if (actToday?.status === 'hecho') {
         completedCount += 1;
       }
-      const stats = calculateHabitStats(entity, activities, cursor);
-      totalStreakSum += stats.currentStreak;
+      totalStreakSum += habitStreakMaps.get(entity.id)?.get(cursor) ?? 0;
     }
 
     const monthIdx = Number(cursor.slice(5, 7)) - 1;
     const dayNum = Number(cursor.slice(8, 10));
-    dailySeries.push({
+    allSeries.push({
       date: cursor,
       shortLabel: `${dayNum} ${SHORT_MONTHS_ES[monthIdx]}`,
       monthKey: cursor.slice(0, 7),
@@ -408,9 +563,11 @@ export function calculateStreakProgressOverview(
     safety++;
   }
 
+  const dailySeries = allSeries.filter((pt) => pt.date >= rangeStart);
+
   // Build 1..31 overlay across the 3 months
   const byMonthDay = new Map<string, number>();
-  for (const pt of dailySeries) {
+  for (const pt of allSeries) {
     byMonthDay.set(`${pt.monthKey}::${pt.dayOfMonth}`, pt.totalStreakSum);
   }
 
@@ -425,7 +582,7 @@ export function calculateStreakProgressOverview(
   }
 
   const monthlySummaries: MonthlyComparisonSummary[] = months.map((m) => {
-    const pts = dailySeries.filter((p) => p.monthKey === m.key);
+    const pts = allSeries.filter((p) => p.monthKey === m.key);
     if (pts.length === 0) {
       return {
         monthKey: m.key,
@@ -478,5 +635,156 @@ export function calculateStreakProgressOverview(
     currentTotalStreak,
     deltaVsPrevPct,
   };
+}
+
+/**
+ * Walks each habit chronologically from startDate to today (or endDate) and captures
+ * the exact date on which each medal milestone (7, 30, 100 days) was first unlocked.
+ */
+export function calculateStreakMilestoneTimeline(
+  entities: Entity[],
+  activities: Activity[],
+  today: LocalDate
+): StreakMilestoneTimelineData {
+  const rawEvents: Array<Omit<StreakMilestoneEvent, 'isFirstOfTier'>> = [];
+  const upcoming: UpcomingMilestone[] = [];
+  const tierTotals: Record<MedalDays, number> = { 7: 0, 30: 0, 100: 0 };
+
+  for (const entity of entities) {
+    const byDate = new Map<LocalDate, Activity>();
+    for (const act of activities) {
+      if (act.entityId === entity.id) {
+        byDate.set(act.date, act);
+      }
+    }
+
+    const stats = calculateHabitStats(entity, activities, today);
+    const effectiveEnd = entity.endDate && entity.endDate < today ? entity.endDate : today;
+
+    const unlockedForHabit = new Set<MedalDays>();
+    if (entity.startDate <= effectiveEnd) {
+      let cursor = entity.startDate;
+      let running = 0;
+      let graceLeft = Math.max(0, entity.graceDays);
+      let safety = 0;
+
+      while (cursor <= effectiveEnd && safety < 3650) {
+        if (isExpectedOccurrence(cursor, entity.cadence, entity.startDate, entity.endDate, entity.customDays)) {
+          const act = byDate.get(cursor);
+          if (act?.status === 'hecho') {
+            running += 1;
+            graceLeft = Math.max(0, entity.graceDays);
+            for (const milestone of MEDAL_MILESTONES) {
+              if (running >= milestone.days && !unlockedForHabit.has(milestone.days)) {
+                unlockedForHabit.add(milestone.days);
+                tierTotals[milestone.days] += 1;
+                rawEvents.push({
+                  id: `${entity.id}-${milestone.days}`,
+                  entityId: entity.id,
+                  habitName: entity.name,
+                  category: entity.category,
+                  days: milestone.days,
+                  medalTitle: milestone.title,
+                  unlockedDate: cursor,
+                  currentStreak: stats.currentStreak,
+                  bestStreak: stats.bestStreak,
+                });
+              }
+            }
+          } else if (running > 0 && graceLeft > 0) {
+            graceLeft -= 1;
+          } else {
+            running = 0;
+            graceLeft = Math.max(0, entity.graceDays);
+          }
+        }
+        cursor = addDays(cursor, 1);
+        safety++;
+      }
+    }
+
+    // Next milestone target for active habits
+    const isActiveToday = !entity.endDate || entity.endDate >= today;
+    if (isActiveToday) {
+      const nextMilestone = MEDAL_MILESTONES.find(
+        (m) => !unlockedForHabit.has(m.days) && stats.currentStreak < m.days
+      );
+      if (nextMilestone) {
+        const daysRemaining = Math.max(1, nextMilestone.days - stats.currentStreak);
+        const multiplier =
+          entity.cadence === 'semanal'
+            ? 7
+            : entity.cadence === 'laborables'
+            ? 1.4
+            : entity.cadence === 'personalizado' && entity.customDays && entity.customDays.length > 0
+            ? Math.max(1, 7 / entity.customDays.length)
+            : 1;
+        upcoming.push({
+          entityId: entity.id,
+          habitName: entity.name,
+          category: entity.category,
+          targetDays: nextMilestone.days,
+          currentStreak: stats.currentStreak,
+          daysRemaining,
+          progressPct: Math.min(
+            99,
+            Math.round((stats.currentStreak / nextMilestone.days) * 100)
+          ),
+          projectedDate: addDays(today, Math.ceil(daysRemaining * multiplier)),
+        });
+      }
+    }
+  }
+
+  // Identify earliest global date for each medal tier
+  const earliestByTier = new Map<MedalDays, string>();
+  const chronological = [...rawEvents].sort((a, b) =>
+    a.unlockedDate.localeCompare(b.unlockedDate) || a.days - b.days
+  );
+  for (const ev of chronological) {
+    if (!earliestByTier.has(ev.days)) {
+      earliestByTier.set(ev.days, ev.id);
+    }
+  }
+
+  const events: StreakMilestoneEvent[] = rawEvents
+    .map((ev) => ({
+      ...ev,
+      isFirstOfTier: earliestByTier.get(ev.days) === ev.id,
+    }))
+    .sort(
+      (a, b) =>
+        b.unlockedDate.localeCompare(a.unlockedDate) || b.days - a.days
+    );
+
+  upcoming.sort((a, b) => a.daysRemaining - b.daysRemaining || b.progressPct - a.progressPct);
+
+  return {
+    events,
+    upcoming,
+    tierTotals,
+  };
+}
+
+export function getHabitLastNDays(
+  entityId: string,
+  activities: Activity[],
+  today: LocalDate,
+  count: number
+): Array<{ date: LocalDate; status: 'vacio' | 'parcial' | 'hecho'; value: number }> {
+  const byDate = new Map<LocalDate, Activity>();
+  for (const act of activities) {
+    if (act.entityId === entityId) {
+      byDate.set(act.date, act);
+    }
+  }
+  return getLastNDates(count, today).map((date) => {
+    const act = byDate.get(date);
+    return {
+      date,
+      status: act?.status ?? 'vacio',
+      value: act?.value ?? 0,
+    };
+  });
 }
 

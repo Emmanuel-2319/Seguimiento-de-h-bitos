@@ -1,6 +1,12 @@
 export type HabitCategory = 'salud' | 'estudio' | 'trabajo' | 'personal';
 
-export type CadenceType = 'diario' | 'laborables' | 'semanal';
+export type HabitType = 'construir' | 'evitar';
+
+export type CadenceType = 'diario' | 'laborables' | 'semanal' | 'personalizado';
+
+export type WeekStart = 'lunes' | 'domingo';
+
+export type ShareCardTheme = 'oscuro' | 'editorial' | 'santuario';
 
 export type ActivityStatus = 'vacio' | 'parcial' | 'hecho';
 
@@ -17,6 +23,8 @@ export interface User {
   passwordHash: string;
   recoveryKey: string; // 12-character key formatted XXXX-XXXX-XXXX
   timezone: string;
+  weekStart?: WeekStart;
+  syncCode?: string;
   createdAt: string;
 }
 
@@ -25,7 +33,9 @@ export interface Entity {
   userId: string;
   name: string;
   category: HabitCategory;
+  habitType?: HabitType;
   cadence: CadenceType;
+  customDays?: number[]; // 0 = Dom .. 6 = Sáb
   startDate: LocalDate;
   endDate?: LocalDate;
   targetValue: number;
@@ -42,6 +52,7 @@ export interface Activity {
   date: LocalDate;
   value: number;
   status: ActivityStatus;
+  note?: string;
   updatedAt: string;
 }
 
@@ -65,6 +76,37 @@ export interface MedalStatus {
   label: string;
   unlocked: boolean;
   unlockedBy?: string;
+  unlockedDate?: LocalDate;
+}
+
+export interface StreakMilestoneEvent {
+  id: string;
+  entityId: string;
+  habitName: string;
+  category: HabitCategory;
+  days: MedalDays;
+  medalTitle: string;
+  unlockedDate: LocalDate;
+  currentStreak: number;
+  bestStreak: number;
+  isFirstOfTier: boolean;
+}
+
+export interface UpcomingMilestone {
+  entityId: string;
+  habitName: string;
+  category: HabitCategory;
+  targetDays: MedalDays;
+  currentStreak: number;
+  daysRemaining: number;
+  progressPct: number;
+  projectedDate: LocalDate;
+}
+
+export interface StreakMilestoneTimelineData {
+  events: StreakMilestoneEvent[];
+  upcoming: UpcomingMilestone[];
+  tierTotals: Record<MedalDays, number>;
 }
 
 export interface HabitStats {
@@ -79,6 +121,8 @@ export interface HabitStats {
     date: LocalDate;
     status: ActivityStatus;
     value: number;
+    expected: boolean;
+    note?: string;
   }>;
   unlockedMedals: MedalDays[];
 }

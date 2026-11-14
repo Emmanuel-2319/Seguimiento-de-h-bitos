@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { db } from '../db/db';
 import type {
   ActiveView,
@@ -9,8 +9,10 @@ import type {
   Entity,
   GlobalStats,
   HabitCategory,
+  HabitType,
   LocalDate,
   User,
+  WeekStart,
 } from '../types';
 import { getTodayLocalDate } from '../utils/date';
 import {
@@ -24,6 +26,8 @@ import {
   sendPendingHabitsNotification,
 } from '../utils/notifications';
 import { calculateGlobalStats } from '../utils/streak';
+
+export type CloudSyncStatus = 'idle' | 'syncing' | 'synced' | 'error';
 
 interface StoreContextValue {
   user: User;
@@ -40,6 +44,12 @@ interface StoreContextValue {
   syncLabel: string;
   toastMessage: string | null;
   showToast: (msg: string) => void;
+
+  // Cross-view jumps & presets
+  calendarFocusDate: LocalDate | null;
+  jumpToCalendarDate: (date: LocalDate) => void;
+  sharePresetNote: string | null;
+  openShareModalWithNote: (note: string) => void;
 
   // Modals
   isAuthModalOpen: boolean;
@@ -63,12 +73,15 @@ interface StoreContextValue {
     entity: Entity,
     date: LocalDate,
     value: number,
-    status: ActivityStatus
+    status: ActivityStatus,
+    note?: string
   ) => void;
   createHabit: (payload: {
     name: string;
     category: HabitCategory;
+    habitType?: HabitType;
     cadence: CadenceType;
+    customDays?: number[];
     startDate: LocalDate;
     endDate?: LocalDate;
     targetValue: number;
@@ -92,10 +105,28 @@ interface StoreContextValue {
   recoverAccountWithKey: (recoveryKey: string) => void;
   logoutAccount: () => void;
   updateTimezone: (timezone: string) => void;
+  updateWeekStart: (weekStart: WeekStart) => void;
+  updateUserName: (name: string) => void;
+  updateUserPassword: (currentPassword: string, newPassword: string) => void;
+  completeAllPendingToday: () => number;
+  lastExternalBackupAt: string | null;
   exportJson: () => void;
-  exportCsv: () => void;
+  exportCsv: (mode?: 'actividades' | 'resumen') => void;
+  copyBackupJson: () => Promise<void>;
   importJson: (jsonText: string) => void;
   resetDemo: () => void;
+  clearWorkspace: () => void;
+  deleteAccount: () => void;
+
+  // Cloud Sync
+  effectiveSyncCode: string;
+  syncStatus: CloudSyncStatus;
+  lastCloudSyncAt: string | null;
+  autoSyncEnabled: boolean;
+  setAutoSyncEnabled: (enabled: boolean) => void;
+  linkSyncCode: (code: string) => void;
+  syncUpload: (silent?: boolean) => Promise<void>;
+  syncDownload: (codeOverride?: string) => Promise<void>;
 
   // Browser Notifications
   notificationPrefs: NotificationPreferences;
@@ -118,7 +149,7 @@ function triggerDownload(filename: string, content: string, mimeType: string) {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -140,6 +171,32 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [detailEntityId, setDetailEntityId] = useState<string | null>(null);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
 
+  const [calendarFocusDate, setCalendarFocusDate] = useState<LocalDate | null>(null);
+  const [sharePresetNote, setSharePresetNote] = useState<string | null>(null);
+
+  const [syncStatus, setSyncStatus] = useState<CloudSyncStatus>('idle');
+  const [lastCloudSyncAt, setLastCloudSyncAt] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem('racha_last_cloud_sync_at');
+    } catch {
+      return null;
+    }
+  });
+  const [autoSyncEnabled, setAutoSyncEnabledState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('racha_auto_sync') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [lastExternalBackupAt, setLastExternalBackupAt] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem('racha_last_external_backup_at');
+    } catch {
+      return null;
+    }
+  });
+
   const [notificationPrefs, setNotificationPrefs] = useState<NotificationPreferences>(() =>
     loadNotificationPrefs(db.getActiveUser().id)
   );
@@ -147,16 +204,42 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     NotificationPermission | 'unsupported'
   >(() => getNotificationPermission());
 
+  const toastTimerRef = useRef<number | null>(null);
+  const autoSyncTimerRef = useRef<number | null>(null);
+
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
-    window.setTimeout(() => {
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = window.setTimeout(() => {
       setToastMessage((prev) => (prev === msg ? null : prev));
+      toastTimerRef.current = null;
     }, 3200);
   }, []);
 
   const markSynced = useCallback(() => {
     setSyncLabel('ahora');
   }, []);
+
+  const effectiveSyncCode = user.syncCode || user.recoveryKey;
+
+  const setAutoSyncEnabled = useCallback(
+    (enabled: boolean) => {
+      setAutoSyncEnabledState(enabled);
+      try {
+        localStorage.setItem('racha_auto_sync', enabled ? '1' : '0');
+      } catch {
+        // Ignore storage error
+      }
+      showToast(
+        enabled
+          ? 'Sincronización automática en la nube activada'
+          : 'Sincronización automática desactivada'
+      );
+    },
+    [showToast]
+  );
 
   const reloadUserWorkspace = useCallback(() => {
     const active = db.getActiveUser();
@@ -168,6 +251,119 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setNotificationPermission(getNotificationPermission());
     markSynced();
   }, [markSynced]);
+
+  const syncUpload = useCallback(
+    async (silent = false) => {
+      const code = effectiveSyncCode.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      if (code.length < 8) {
+        if (!silent) showToast('Configura un código de sincronización válido');
+        return;
+      }
+      setSyncStatus('syncing');
+      try {
+        const snapshot = db.getSyncSnapshot(user.id);
+        const res = await fetch(`/api/sync/${encodeURIComponent(code)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ payload: snapshot }),
+        });
+        const data = (await res.json()) as { updatedAt?: string; error?: string };
+        if (!res.ok) {
+          throw new Error(data.error || 'No se pudo subir el respaldo');
+        }
+        const timestamp = data.updatedAt || new Date().toISOString();
+        setLastCloudSyncAt(timestamp);
+        setSyncStatus('synced');
+        try {
+          localStorage.setItem('racha_last_cloud_sync_at', timestamp);
+        } catch {
+          // Ignore storage error
+        }
+        if (!silent) {
+          showToast('Datos guardados en la nube correctamente');
+        }
+      } catch (err) {
+        setSyncStatus('error');
+        if (!silent) {
+          showToast(
+            err instanceof Error ? err.message : 'Error al sincronizar con la nube'
+          );
+        }
+      }
+    },
+    [effectiveSyncCode, user.id, showToast]
+  );
+
+  const syncDownload = useCallback(
+    async (codeOverride?: string) => {
+      const rawCode = (codeOverride ?? effectiveSyncCode)
+        .replace(/[^A-Za-z0-9]/g, '')
+        .toUpperCase();
+      if (rawCode.length < 8) {
+        showToast('Introduce un código de sincronización de al menos 8 caracteres');
+        return;
+      }
+      setSyncStatus('syncing');
+      try {
+        const res = await fetch(`/api/sync/${encodeURIComponent(rawCode)}`);
+        const data = (await res.json()) as {
+          updatedAt?: string;
+          payload?: {
+            user?: { timezone?: string; weekStart?: WeekStart } | null;
+            entities?: Entity[];
+            activities?: Activity[];
+          };
+          error?: string;
+        };
+        if (!res.ok || !data.payload) {
+          throw new Error(data.error || 'No se encontró respaldo en la nube');
+        }
+        if (codeOverride) {
+          db.updateUserSyncCode(user.id, codeOverride);
+        }
+        const applied = db.applySyncSnapshot(user.id, data.payload);
+        reloadUserWorkspace();
+        const timestamp = data.updatedAt || new Date().toISOString();
+        setLastCloudSyncAt(timestamp);
+        setSyncStatus('synced');
+        try {
+          localStorage.setItem('racha_last_cloud_sync_at', timestamp);
+        } catch {
+          // Ignore storage error
+        }
+        showToast(
+          `Sincronizado: ${applied.entitiesCount} hábitos y ${applied.activitiesCount} registros`
+        );
+      } catch (err) {
+        setSyncStatus('error');
+        showToast(
+          err instanceof Error ? err.message : 'Error al descargar de la nube'
+        );
+      }
+    },
+    [effectiveSyncCode, user.id, reloadUserWorkspace, showToast]
+  );
+
+  const linkSyncCode = useCallback(
+    (code: string) => {
+      const updated = db.updateUserSyncCode(user.id, code);
+      setUser(updated);
+      showToast(`Código vinculado: ${updated.syncCode}`);
+    },
+    [user.id, showToast]
+  );
+
+  // Auto-upload debounced when autoSyncEnabled is active
+  const scheduleAutoSync = useCallback(() => {
+    if (!autoSyncEnabled) return;
+    if (autoSyncTimerRef.current !== null) {
+      window.clearTimeout(autoSyncTimerRef.current);
+    }
+    autoSyncTimerRef.current = window.setTimeout(() => {
+      void syncUpload(true);
+      autoSyncTimerRef.current = null;
+    }, 2000);
+  }, [autoSyncEnabled, syncUpload]);
 
   const today = useMemo(() => getTodayLocalDate(user.timezone), [user.timezone]);
 
@@ -181,21 +377,23 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [entities, activities, today]
   );
 
-  // Daily scheduler checking every 30s if it's time to notify about pending habits
+  // Daily scheduler + visibility/focus catch-up checking if it's time to notify
   useEffect(() => {
     if (!notificationPrefs.enabled || notificationPermission !== 'granted') return;
 
-    const checkAndNotify = () => {
+    let cancelled = false;
+    const checkAndNotify = async () => {
+      if (cancelled) return;
       if (notificationPrefs.lastNotifiedDate === today) return;
       if (pendingTodayHabits.length === 0) return;
 
       const nowHHMM = getCurrentTimeHHMM(user.timezone);
       if (nowHHMM >= notificationPrefs.reminderTime) {
-        const sent = sendPendingHabitsNotification({
+        const sent = await sendPendingHabitsNotification({
           pendingHabits: pendingTodayHabits,
           today,
         });
-        if (sent) {
+        if (sent && !cancelled) {
           const updated: NotificationPreferences = {
             ...notificationPrefs,
             lastNotifiedDate: today,
@@ -206,9 +404,24 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     };
 
-    checkAndNotify();
-    const timer = window.setInterval(checkAndNotify, 30000);
-    return () => window.clearInterval(timer);
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        void checkAndNotify();
+      }
+    };
+
+    void checkAndNotify();
+    const timer = window.setInterval(() => {
+      void checkAndNotify();
+    }, 30000);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+    };
   }, [
     notificationPrefs,
     notificationPermission,
@@ -218,6 +431,16 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     user.id,
   ]);
 
+  const jumpToCalendarDate = useCallback((date: LocalDate) => {
+    setCalendarFocusDate(date);
+    setActiveView('calendario');
+  }, []);
+
+  const openShareModalWithNote = useCallback((note: string) => {
+    setSharePresetNote(note);
+    setIsShareModalOpen(true);
+  }, []);
+
   const toggleDayStatus = useCallback(
     (entity: Entity, date: LocalDate) => {
       const existing = activities.find(
@@ -226,27 +449,51 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const nextStatus: ActivityStatus =
         existing?.status === 'hecho' ? 'vacio' : 'hecho';
       const nextValue = nextStatus === 'hecho' ? entity.targetValue : 0;
-      const updated = db.upsertActivity(user.id, entity.id, date, nextValue, nextStatus);
+      const updated = db.upsertActivity(
+        user.id,
+        entity.id,
+        date,
+        nextValue,
+        nextStatus,
+        existing?.note
+      );
       setActivities(updated);
       markSynced();
+      scheduleAutoSync();
     },
-    [activities, user.id, markSynced]
+    [activities, user.id, markSynced, scheduleAutoSync]
   );
 
   const setDayActivity = useCallback(
-    (entity: Entity, date: LocalDate, value: number, status: ActivityStatus) => {
-      const updated = db.upsertActivity(user.id, entity.id, date, value, status);
+    (
+      entity: Entity,
+      date: LocalDate,
+      value: number,
+      status: ActivityStatus,
+      note?: string
+    ) => {
+      const updated = db.upsertActivity(
+        user.id,
+        entity.id,
+        date,
+        value,
+        status,
+        note
+      );
       setActivities(updated);
       markSynced();
+      scheduleAutoSync();
     },
-    [user.id, markSynced]
+    [user.id, markSynced, scheduleAutoSync]
   );
 
   const createHabit = useCallback(
     (payload: {
       name: string;
       category: HabitCategory;
+      habitType?: HabitType;
       cadence: CadenceType;
+      customDays?: number[];
       startDate: LocalDate;
       endDate?: LocalDate;
       targetValue: number;
@@ -257,9 +504,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const created = db.createEntity(user.id, payload);
       setEntities((prev) => [...prev, created]);
       markSynced();
+      scheduleAutoSync();
       showToast(`Hábito «${created.name}» creado`);
     },
-    [user.id, markSynced, showToast]
+    [user.id, markSynced, scheduleAutoSync, showToast]
   );
 
   const updateHabit = useCallback(
@@ -327,30 +575,118 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const updated = db.updateUserTimezone(user.id, timezone);
       setUser(updated);
       markSynced();
+      scheduleAutoSync();
       showToast(`Zona horaria actualizada a ${timezone}`);
     },
-    [user.id, markSynced, showToast]
+    [user.id, markSynced, scheduleAutoSync, showToast]
   );
+
+  const updateWeekStart = useCallback(
+    (weekStart: WeekStart) => {
+      const updated = db.updateUserWeekStart(user.id, weekStart);
+      setUser(updated);
+      markSynced();
+      scheduleAutoSync();
+      showToast(
+        `Semana configurada iniciando en ${weekStart === 'lunes' ? 'lunes' : 'domingo'}`
+      );
+    },
+    [user.id, markSynced, scheduleAutoSync, showToast]
+  );
+
+  const updateUserName = useCallback(
+    (name: string) => {
+      const updated = db.updateUserName(user.id, name);
+      setUser(updated);
+      setSession(db.getSession());
+      markSynced();
+      scheduleAutoSync();
+      showToast(`Nombre actualizado a ${updated.name}`);
+    },
+    [user.id, markSynced, scheduleAutoSync, showToast]
+  );
+
+  const updateUserPassword = useCallback(
+    (currentPassword: string, newPassword: string) => {
+      db.updateUserPassword(user.id, currentPassword, newPassword);
+      showToast('Contraseña actualizada correctamente');
+    },
+    [user.id, showToast]
+  );
+
+  const completeAllPendingToday = useCallback(() => {
+    if (pendingTodayHabits.length === 0) return 0;
+    let latestActivities = activities;
+    for (const ent of pendingTodayHabits) {
+      latestActivities = db.upsertActivity(
+        user.id,
+        ent.id,
+        today,
+        ent.targetValue,
+        'hecho'
+      );
+    }
+    setActivities(latestActivities);
+    markSynced();
+    scheduleAutoSync();
+    showToast(
+      `¡${pendingTodayHabits.length} ${
+        pendingTodayHabits.length === 1 ? 'hábito completado' : 'hábitos completados'
+      } hoy!`
+    );
+    return pendingTodayHabits.length;
+  }, [pendingTodayHabits, activities, user.id, today, markSynced, scheduleAutoSync, showToast]);
+
+  const recordExternalBackup = useCallback(() => {
+    const nowIso = new Date().toISOString();
+    setLastExternalBackupAt(nowIso);
+    try {
+      localStorage.setItem('racha_last_external_backup_at', nowIso);
+    } catch {
+      // Ignore storage error
+    }
+  }, []);
 
   const exportJson = useCallback(() => {
     const content = db.exportUserJson(user.id);
-    triggerDownload(`racha-backup-${today}.json`, content, 'application/json');
-    showToast('Copia JSON descargada');
-  }, [user.id, today, showToast]);
+    triggerDownload(`racha-respaldo-${today}.json`, content, 'application/json;charset=utf-8;');
+    recordExternalBackup();
+    showToast('Respaldo JSON completo descargado');
+  }, [user.id, today, recordExternalBackup, showToast]);
 
-  const exportCsv = useCallback(() => {
-    const content = db.exportUserCsv(user.id);
-    triggerDownload(`racha-actividades-${today}.csv`, content, 'text/csv;charset=utf-8;');
-    showToast('Registro CSV descargado');
-  }, [user.id, today, showToast]);
+  const exportCsv = useCallback(
+    (mode: 'actividades' | 'resumen' = 'actividades') => {
+      const content = db.exportUserCsv(user.id, mode);
+      const filename =
+        mode === 'resumen'
+          ? `racha-resumen-progreso-${today}.csv`
+          : `racha-actividades-${today}.csv`;
+      triggerDownload(filename, content, 'text/csv;charset=utf-8;');
+      recordExternalBackup();
+      showToast(
+        mode === 'resumen'
+          ? 'Resumen de progreso CSV descargado'
+          : 'Registro diario CSV descargado'
+      );
+    },
+    [user.id, today, recordExternalBackup, showToast]
+  );
+
+  const copyBackupJson = useCallback(async () => {
+    const content = db.exportUserJson(user.id);
+    await navigator.clipboard.writeText(content);
+    recordExternalBackup();
+    showToast('Respaldo JSON copiado al portapapeles');
+  }, [user.id, recordExternalBackup, showToast]);
 
   const importJson = useCallback(
     (jsonText: string) => {
       const res = db.importUserJson(user.id, jsonText);
       reloadUserWorkspace();
+      scheduleAutoSync();
       showToast(`Importados ${res.entitiesCount} hábitos y ${res.activitiesCount} registros`);
     },
-    [user.id, reloadUserWorkspace, showToast]
+    [user.id, reloadUserWorkspace, scheduleAutoSync, showToast]
   );
 
   const resetDemo = useCallback(() => {
@@ -358,6 +694,19 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     reloadUserWorkspace();
     showToast('Datos de demostración restaurados');
   }, [user.id, user.timezone, reloadUserWorkspace, showToast]);
+
+  const clearWorkspace = useCallback(() => {
+    db.clearUserWorkspace(user.id);
+    reloadUserWorkspace();
+    showToast('Espacio de trabajo vaciado (0 hábitos)');
+  }, [user.id, reloadUserWorkspace, showToast]);
+
+  const deleteAccount = useCallback(() => {
+    db.deleteUserAccount(user.id);
+    reloadUserWorkspace();
+    setActiveView('tablero');
+    showToast('Cuenta eliminada · Volviste al modo local');
+  }, [user.id, reloadUserWorkspace, showToast]);
 
   const enableNotifications = useCallback(async () => {
     const perm = await requestNotificationPermission();
@@ -422,7 +771,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       showToast('Concede permiso de notificaciones en tu navegador para probarlas');
       return;
     }
-    const ok = sendPendingHabitsNotification({
+    const ok = await sendPendingHabitsNotification({
       pendingHabits: pendingTodayHabits,
       today,
       isTest: true,
@@ -449,6 +798,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     syncLabel,
     toastMessage,
     showToast,
+    calendarFocusDate,
+    jumpToCalendarDate,
+    sharePresetNote,
+    openShareModalWithNote,
     isAuthModalOpen,
     openAuthModal: () => setIsAuthModalOpen(true),
     closeAuthModal: () => setIsAuthModalOpen(false),
@@ -470,8 +823,14 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     openDetailModal: (entityId: string) => setDetailEntityId(entityId),
     closeDetailModal: () => setDetailEntityId(null),
     isShareModalOpen,
-    openShareModal: () => setIsShareModalOpen(true),
-    closeShareModal: () => setIsShareModalOpen(false),
+    openShareModal: () => {
+      setSharePresetNote(null);
+      setIsShareModalOpen(true);
+    },
+    closeShareModal: () => {
+      setIsShareModalOpen(false);
+      setSharePresetNote(null);
+    },
     toggleDayStatus,
     setDayActivity,
     createHabit,
@@ -482,10 +841,26 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     recoverAccountWithKey,
     logoutAccount,
     updateTimezone,
+    updateWeekStart,
+    updateUserName,
+    updateUserPassword,
+    completeAllPendingToday,
+    lastExternalBackupAt,
     exportJson,
     exportCsv,
+    copyBackupJson,
     importJson,
     resetDemo,
+    clearWorkspace,
+    deleteAccount,
+    effectiveSyncCode,
+    syncStatus,
+    lastCloudSyncAt,
+    autoSyncEnabled,
+    setAutoSyncEnabled,
+    linkSyncCode,
+    syncUpload,
+    syncDownload,
     notificationPrefs,
     notificationPermission,
     pendingTodayCount: pendingTodayHabits.length,

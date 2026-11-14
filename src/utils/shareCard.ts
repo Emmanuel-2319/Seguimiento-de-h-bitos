@@ -1,4 +1,4 @@
-import type { GlobalStats, LocalDate } from '../types';
+import type { GlobalStats, LocalDate, ShareCardTheme } from '../types';
 
 export type CardOrientation = 'landscape' | 'portrait';
 
@@ -16,14 +16,98 @@ export interface DisciplineCardPayload {
   note: string;
   showHabitNames: boolean;
   orientation: CardOrientation;
+  theme?: ShareCardTheme;
+  milestoneHighlight?: string;
 }
 
-const HEATMAP_FILLS: Record<0 | 1 | 2 | 3 | 4, string> = {
-  0: '#161616',
-  1: '#35420c',
-  2: '#647d14',
-  3: '#9ec421',
-  4: '#d8f23a',
+interface ThemePalette {
+  outerBg: string;
+  grid: string;
+  frameBg: string;
+  frameBorder: string;
+  cardBg: string;
+  cardBorder: string;
+  rowBg: string;
+  accent: string;
+  accentSoftBg: string;
+  accentSoftBorder: string;
+  badgeText: string;
+  textPrimary: string;
+  textMuted: string;
+  textSubtle: string;
+  heatmap: Record<0 | 1 | 2 | 3 | 4, string>;
+}
+
+const THEME_PALETTES: Record<ShareCardTheme, ThemePalette> = {
+  oscuro: {
+    outerBg: '#000000',
+    grid: '#0e0e0e',
+    frameBg: '#070707',
+    frameBorder: '#1c1c1c',
+    cardBg: '#0b0b0b',
+    cardBorder: '#1c1c1c',
+    rowBg: '#121212',
+    accent: '#d8f23a',
+    accentSoftBg: '#161a08',
+    accentSoftBorder: '#313d0c',
+    badgeText: '#000000',
+    textPrimary: '#ffffff',
+    textMuted: '#8a8a8a',
+    textSubtle: '#555555',
+    heatmap: {
+      0: '#161616',
+      1: '#35420c',
+      2: '#647d14',
+      3: '#9ec421',
+      4: '#d8f23a',
+    },
+  },
+  editorial: {
+    outerBg: '#ece9e1',
+    grid: '#e2ded4',
+    frameBg: '#f9f7f2',
+    frameBorder: '#d6d1c4',
+    cardBg: '#ffffff',
+    cardBorder: '#e2ddd0',
+    rowBg: '#f2efe7',
+    accent: '#2f6d1b',
+    accentSoftBg: '#e7f1df',
+    accentSoftBorder: '#b7d4a3',
+    badgeText: '#ffffff',
+    textPrimary: '#171717',
+    textMuted: '#636058',
+    textSubtle: '#918c81',
+    heatmap: {
+      0: '#eae6dc',
+      1: '#cbe0ba',
+      2: '#8dc16d',
+      3: '#4f9631',
+      4: '#2f6d1b',
+    },
+  },
+  santuario: {
+    outerBg: '#07141f',
+    grid: '#0d2234',
+    frameBg: '#0a1c2b',
+    frameBorder: '#1b3d57',
+    cardBg: '#0f273a',
+    cardBorder: '#1e4663',
+    rowBg: '#143148',
+    accent: '#7df0d8',
+    accentSoftBg: '#103445',
+    accentSoftBorder: '#296c7f',
+    badgeText: '#07141f',
+    textPrimary: '#f2f9ff',
+    textMuted: '#99bfd4',
+    textSubtle: '#5c859e',
+    heatmap: {
+      0: '#142d41',
+      1: '#1d4f63',
+      2: '#2d7f8b',
+      3: '#4fc0b4',
+      4: '#7df0d8',
+    },
+  },
 };
 
 function roundRectPath(
@@ -86,6 +170,7 @@ export function renderDisciplineCard(
   canvas: HTMLCanvasElement,
   data: DisciplineCardPayload
 ): void {
+  const palette = THEME_PALETTES[data.theme ?? 'oscuro'];
   const isPortrait = data.orientation === 'portrait';
   const width = isPortrait ? 1080 : 1200;
   const height = isPortrait ? 1350 : 675;
@@ -97,11 +182,11 @@ export function renderDisciplineCard(
   if (!ctx) return;
 
   // Base background
-  ctx.fillStyle = '#000000';
+  ctx.fillStyle = palette.outerBg;
   ctx.fillRect(0, 0, width, height);
 
   // Subtle architectural grid
-  ctx.strokeStyle = '#0e0e0e';
+  ctx.strokeStyle = palette.grid;
   ctx.lineWidth = 1;
   for (let gx = 0; gx < width; gx += 48) {
     ctx.beginPath();
@@ -118,16 +203,24 @@ export function renderDisciplineCard(
 
   // Outer card frame
   const pad = 42;
-  drawRoundedCard(ctx, pad, pad, width - pad * 2, height - pad * 2, 28, '#070707', '#1c1c1c');
+  drawRoundedCard(
+    ctx,
+    pad,
+    pad,
+    width - pad * 2,
+    height - pad * 2,
+    28,
+    palette.frameBg,
+    palette.frameBorder
+  );
 
   const innerX = pad + 38;
   const innerW = width - (pad + 38) * 2;
-  let cursorY = pad + 44;
+  let cursorY = pad + 40;
 
   // Header: Brand lockup + Date & User
-  drawRoundedCard(ctx, innerX, cursorY, 42, 42, 10, '#d8f23a');
-  // Lightning bolt inside badge
-  ctx.fillStyle = '#000000';
+  drawRoundedCard(ctx, innerX, cursorY, 42, 42, 10, palette.accent);
+  ctx.fillStyle = palette.badgeText;
   ctx.beginPath();
   ctx.moveTo(innerX + 24, cursorY + 9);
   ctx.lineTo(innerX + 13, cursorY + 23);
@@ -138,32 +231,73 @@ export function renderDisciplineCard(
   ctx.closePath();
   ctx.fill();
 
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = palette.textPrimary;
   ctx.font = '700 28px "Space Grotesk", sans-serif';
   ctx.fillText('RACHA', innerX + 56, cursorY + 27);
 
-  drawRoundedCard(ctx, innerX + 162, cursorY + 6, 178, 28, 7, '#161a08', '#313d0c');
-  ctx.fillStyle = '#d8f23a';
+  drawRoundedCard(
+    ctx,
+    innerX + 162,
+    cursorY + 6,
+    186,
+    28,
+    7,
+    palette.accentSoftBg,
+    palette.accentSoftBorder
+  );
+  ctx.fillStyle = palette.accent;
   ctx.font = '700 12px "Space Grotesk", sans-serif';
   ctx.fillText('TARJETA DE DISCIPLINA', innerX + 174, cursorY + 24);
 
   // Date & User right-aligned
   ctx.textAlign = 'right';
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = palette.textPrimary;
   ctx.font = '600 16px "Space Grotesk", sans-serif';
   ctx.fillText(data.userName || 'Modo Local', innerX + innerW, cursorY + 18);
-  ctx.fillStyle = '#8a8a8a';
+  ctx.fillStyle = palette.textMuted;
   ctx.font = '500 14px "JetBrains Mono", monospace';
   ctx.fillText(data.today, innerX + innerW, cursorY + 38);
   ctx.textAlign = 'left';
 
-  cursorY += 72;
+  cursorY += 66;
+
+  // Optional milestone highlight banner
+  if (data.milestoneHighlight?.trim()) {
+    drawRoundedCard(
+      ctx,
+      innerX,
+      cursorY,
+      innerW,
+      36,
+      10,
+      palette.accentSoftBg,
+      palette.accentSoftBorder
+    );
+    ctx.fillStyle = palette.accent;
+    ctx.font = '700 13px "Space Grotesk", sans-serif';
+    drawTruncatedText(
+      ctx,
+      `HITO DESBLOQUEADO · ${data.milestoneHighlight.trim()}`,
+      innerX + 16,
+      cursorY + 22,
+      innerW - 32
+    );
+    cursorY += 48;
+  }
 
   // KPI Grid (4 across in landscape, 2x2 in portrait)
   const kpiGap = 16;
   const kpiCols = isPortrait ? 2 : 4;
   const kpiW = (innerW - kpiGap * (kpiCols - 1)) / kpiCols;
-  const kpiH = 122;
+  const kpiH = data.milestoneHighlight?.trim() && !isPortrait ? 110 : 122;
+
+  const unlockedMedalsText = data.globalStats.medals
+    .map((m) =>
+      m.unlocked && m.unlockedDate
+        ? `${m.days}d (${m.unlockedDate.slice(5)})`
+        : `${m.days}d ${m.unlocked ? '✓' : '·'}`
+    )
+    .join('  ');
 
   const kpis = [
     {
@@ -187,11 +321,9 @@ export function renderDisciplineCard(
       accent: false,
     },
     {
-      label: 'MEDALLAS',
+      label: 'MEDALLAS Y FECHAS',
       value: `${data.globalStats.medals.filter((m) => m.unlocked).length}/3`,
-      sub: data.globalStats.medals
-        .map((m) => `${m.days}d ${m.unlocked ? '✓' : '·'}`)
-        .join('  '),
+      sub: unlockedMedalsText,
       accent: true,
     },
   ];
@@ -202,41 +334,40 @@ export function renderDisciplineCard(
     const kx = innerX + col * (kpiW + kpiGap);
     const ky = cursorY + row * (kpiH + kpiGap);
 
-    drawRoundedCard(ctx, kx, ky, kpiW, kpiH, 16, '#0b0b0b', '#1c1c1c');
-    ctx.fillStyle = '#8a8a8a';
+    drawRoundedCard(ctx, kx, ky, kpiW, kpiH, 16, palette.cardBg, palette.cardBorder);
+    ctx.fillStyle = palette.textMuted;
     ctx.font = '600 11px "Space Grotesk", sans-serif';
-    ctx.fillText(kpi.label, kx + 18, ky + 28);
+    ctx.fillText(kpi.label, kx + 18, ky + 26);
 
-    ctx.fillStyle = kpi.accent ? '#d8f23a' : '#ffffff';
-    ctx.font = '700 36px "Space Grotesk", sans-serif';
-    ctx.fillText(kpi.value, kx + 18, ky + 76);
+    ctx.fillStyle = kpi.accent ? palette.accent : palette.textPrimary;
+    ctx.font = '700 34px "Space Grotesk", sans-serif';
+    ctx.fillText(kpi.value, kx + 18, ky + (kpiH > 115 ? 74 : 68));
 
-    ctx.fillStyle = '#8a8a8a';
-    ctx.font = '500 13px "Space Grotesk", sans-serif';
-    drawTruncatedText(ctx, kpi.sub, kx + 18, ky + 102, kpiW - 36);
+    ctx.fillStyle = palette.textMuted;
+    ctx.font = '500 12px "Space Grotesk", sans-serif';
+    drawTruncatedText(ctx, kpi.sub, kx + 18, ky + (kpiH > 115 ? 100 : 92), kpiW - 36);
   });
 
-  cursorY += (isPortrait ? 2 : 1) * kpiH + (isPortrait ? kpiGap : 0) + 22;
+  cursorY += (isPortrait ? 2 : 1) * kpiH + (isPortrait ? kpiGap : 0) + 18;
 
   // Middle Section: Heatmap (left or top) + Habits Summary (right or bottom)
   if (!isPortrait) {
     const leftW = 540;
     const rightW = innerW - leftW - 18;
-    const boxH = 264;
+    const boxH = data.milestoneHighlight?.trim() ? 236 : 264;
 
-    // Heatmap Box
-    drawRoundedCard(ctx, innerX, cursorY, leftW, boxH, 18, '#0b0b0b', '#1c1c1c');
-    ctx.fillStyle = '#ffffff';
+    drawRoundedCard(ctx, innerX, cursorY, leftW, boxH, 18, palette.cardBg, palette.cardBorder);
+    ctx.fillStyle = palette.textPrimary;
     ctx.font = '700 14px "Space Grotesk", sans-serif';
-    ctx.fillText('MAPA DE CONSISTENCIA (16 SEMANAS)', innerX + 22, cursorY + 32);
-    ctx.fillStyle = '#8a8a8a';
+    ctx.fillText('MAPA DE CONSISTENCIA (16 SEMANAS)', innerX + 22, cursorY + 30);
+    ctx.fillStyle = palette.textMuted;
     ctx.font = '400 12px "Space Grotesk", sans-serif';
-    ctx.fillText('112 días registrados en tiempo local', innerX + 22, cursorY + 52);
+    ctx.fillText('112 días registrados en tiempo local', innerX + 22, cursorY + 49);
 
-    const cellSize = 22;
-    const cellGap = 7;
+    const cellSize = boxH < 250 ? 20 : 22;
+    const cellGap = boxH < 250 ? 6 : 7;
     const gridX = innerX + 26;
-    const gridY = cursorY + 70;
+    const gridY = cursorY + 64;
     for (let w = 0; w < 16; w++) {
       for (let d = 0; d < 7; d++) {
         const dayData = data.globalStats.heatmapDays[w * 7 + d];
@@ -248,48 +379,45 @@ export function renderDisciplineCard(
           cellSize,
           cellSize,
           4,
-          HEATMAP_FILLS[lvl]
+          palette.heatmap[lvl]
         );
       }
     }
 
-    // Habits Box
     const rightX = innerX + leftW + 18;
-    drawRoundedCard(ctx, rightX, cursorY, rightW, boxH, 18, '#0b0b0b', '#1c1c1c');
-    ctx.fillStyle = '#ffffff';
+    drawRoundedCard(ctx, rightX, cursorY, rightW, boxH, 18, palette.cardBg, palette.cardBorder);
+    ctx.fillStyle = palette.textPrimary;
     ctx.font = '700 14px "Space Grotesk", sans-serif';
-    ctx.fillText('RUTINAS Y RACHAS ACTIVAS', rightX + 22, cursorY + 32);
+    ctx.fillText('RUTINAS Y RACHAS ACTIVAS', rightX + 22, cursorY + 30);
 
-    const visibleHabits = data.habitSummaries.slice(0, 5);
+    const maxRows = boxH < 250 ? 4 : 5;
+    const visibleHabits = data.habitSummaries.slice(0, maxRows);
     visibleHabits.forEach((h, i) => {
-      const rowY = cursorY + 58 + i * 38;
-      drawRoundedCard(ctx, rightX + 20, rowY, rightW - 40, 32, 8, '#121212');
-      ctx.fillStyle = '#d8f23a';
+      const rowY = cursorY + 54 + i * 38;
+      drawRoundedCard(ctx, rightX + 20, rowY, rightW - 40, 32, 8, palette.rowBg);
+      ctx.fillStyle = palette.accent;
       ctx.font = '700 11px "Space Grotesk", sans-serif';
       ctx.fillText(h.category.toUpperCase(), rightX + 32, rowY + 20);
 
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = palette.textPrimary;
       ctx.font = '500 13px "Space Grotesk", sans-serif';
       const title = data.showHabitNames ? h.name : `Hábito #${i + 1}`;
       drawTruncatedText(ctx, title, rightX + 112, rowY + 20, rightW - 220);
 
       ctx.textAlign = 'right';
-      ctx.fillStyle = '#d8f23a';
+      ctx.fillStyle = palette.accent;
       ctx.font = '700 13px "Space Grotesk", sans-serif';
       ctx.fillText(`${h.streak} d`, rightX + rightW - 32, rowY + 20);
       ctx.textAlign = 'left';
     });
-
-    cursorY += boxH + 22;
   } else {
-    // Portrait Layout
-    const hmH = 310;
-    drawRoundedCard(ctx, innerX, cursorY, innerW, hmH, 18, '#0b0b0b', '#1c1c1c');
-    ctx.fillStyle = '#ffffff';
+    const hmH = 304;
+    drawRoundedCard(ctx, innerX, cursorY, innerW, hmH, 18, palette.cardBg, palette.cardBorder);
+    ctx.fillStyle = palette.textPrimary;
     ctx.font = '700 15px "Space Grotesk", sans-serif';
     ctx.fillText('MAPA DE CONSISTENCIA (16 SEMANAS)', innerX + 24, cursorY + 34);
 
-    const cellSize = 34;
+    const cellSize = 33;
     const cellGap = 11;
     const totalGridW = 16 * cellSize + 15 * cellGap;
     const gridX = innerX + (innerW - totalGridW) / 2;
@@ -305,51 +433,49 @@ export function renderDisciplineCard(
           cellSize,
           cellSize,
           6,
-          HEATMAP_FILLS[lvl]
+          palette.heatmap[lvl]
         );
       }
     }
 
-    cursorY += hmH + 20;
+    cursorY += hmH + 18;
 
-    const listH = 420;
-    drawRoundedCard(ctx, innerX, cursorY, innerW, listH, 18, '#0b0b0b', '#1c1c1c');
-    ctx.fillStyle = '#ffffff';
+    const listH = data.milestoneHighlight?.trim() ? 390 : 420;
+    drawRoundedCard(ctx, innerX, cursorY, innerW, listH, 18, palette.cardBg, palette.cardBorder);
+    ctx.fillStyle = palette.textPrimary;
     ctx.font = '700 15px "Space Grotesk", sans-serif';
     ctx.fillText('RUTINAS Y RACHAS ACTIVAS', innerX + 24, cursorY + 36);
 
     const visibleHabits = data.habitSummaries.slice(0, 6);
     visibleHabits.forEach((h, i) => {
-      const rowY = cursorY + 62 + i * 56;
-      drawRoundedCard(ctx, innerX + 22, rowY, innerW - 44, 46, 12, '#121212');
-      ctx.fillStyle = '#d8f23a';
+      const rowY = cursorY + 60 + i * 54;
+      drawRoundedCard(ctx, innerX + 22, rowY, innerW - 44, 44, 12, palette.rowBg);
+      ctx.fillStyle = palette.accent;
       ctx.font = '700 12px "Space Grotesk", sans-serif';
-      ctx.fillText(h.category.toUpperCase(), innerX + 38, rowY + 28);
+      ctx.fillText(h.category.toUpperCase(), innerX + 38, rowY + 27);
 
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = palette.textPrimary;
       ctx.font = '500 16px "Space Grotesk", sans-serif';
       const title = data.showHabitNames ? h.name : `Hábito #${i + 1}`;
-      drawTruncatedText(ctx, title, innerX + 135, rowY + 28, innerW - 290);
+      drawTruncatedText(ctx, title, innerX + 135, rowY + 27, innerW - 290);
 
       ctx.textAlign = 'right';
-      ctx.fillStyle = '#d8f23a';
+      ctx.fillStyle = palette.accent;
       ctx.font = '700 16px "Space Grotesk", sans-serif';
-      ctx.fillText(`${h.streak} d`, innerX + innerW - 38, rowY + 28);
+      ctx.fillText(`${h.streak} d`, innerX + innerW - 38, rowY + 27);
       ctx.textAlign = 'left';
     });
-
-    cursorY += listH + 24;
   }
 
   // Footer Reminder Quote
   const noteText =
     data.note.trim() || 'La consistencia diaria supera a la intensidad ocasional.';
-  ctx.fillStyle = '#d8f23a';
+  ctx.fillStyle = palette.accent;
   ctx.font = '500 15px "Space Grotesk", sans-serif';
   drawTruncatedText(ctx, `“${noteText}”`, innerX, height - pad - 28, innerW - 180);
 
   ctx.textAlign = 'right';
-  ctx.fillStyle = '#555555';
+  ctx.fillStyle = palette.textSubtle;
   ctx.font = '600 12px "JetBrains Mono", monospace';
   ctx.fillText('RACHA HABITS', innerX + innerW, height - pad - 28);
   ctx.textAlign = 'left';

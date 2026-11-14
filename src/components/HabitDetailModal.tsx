@@ -1,9 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Award, CheckCircle2, Crown, Flame, Pencil, Trash2, X } from 'lucide-react';
 import { useStore } from '../hooks/useStore';
 import type { ActivityStatus, MedalDays } from '../types';
 import { formatReadableDateEs } from '../utils/date';
-import { calculateHabitStats } from '../utils/streak';
+import {
+  calculateHabitStats,
+  calculateStreakMilestoneTimeline,
+  getHabitLastNDays,
+} from '../utils/streak';
 
 export const HabitDetailModal: React.FC = () => {
   const {
@@ -21,6 +25,7 @@ export const HabitDetailModal: React.FC = () => {
   const [selectedDate, setSelectedDate] = useState(today);
   const [valueInput, setValueInput] = useState(0);
   const [statusInput, setStatusInput] = useState<ActivityStatus>('vacio');
+  const [noteInput, setNoteInput] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
@@ -30,12 +35,37 @@ export const HabitDetailModal: React.FC = () => {
 
   useEffect(() => {
     if (!entity) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeDetailModal();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [entity, closeDetailModal]);
+
+  useEffect(() => {
+    if (!entity) return;
     const act = activities.find(
       (a) => a.entityId === entity.id && a.date === selectedDate
     );
     setValueInput(act?.value ?? entity.targetValue);
     setStatusInput(act?.status ?? 'vacio');
+    setNoteInput(act?.note ?? '');
   }, [entity, activities, selectedDate]);
+
+  const last30Days = useMemo(() => {
+    if (!entity) return [];
+    return getHabitLastNDays(entity.id, activities, today, 30);
+  }, [entity, activities, today]);
+
+  const unlockedDateMap = useMemo(() => {
+    if (!entity) return new Map<MedalDays, string>();
+    const tl = calculateStreakMilestoneTimeline([entity], activities, today);
+    const map = new Map<MedalDays, string>();
+    for (const ev of tl.events) {
+      map.set(ev.days, ev.unlockedDate);
+    }
+    return map;
+  }, [entity, activities, today]);
 
   if (!entity) return null;
 
@@ -49,10 +79,14 @@ export const HabitDetailModal: React.FC = () => {
         : statusInput === 'hecho'
         ? Math.max(entity.targetValue, valueInput)
         : Math.max(1, valueInput);
-    setDayActivity(entity, selectedDate, finalValue, statusInput);
+    setDayActivity(entity, selectedDate, finalValue, statusInput, noteInput);
   };
 
-  const medalMeta: Array<{ days: MedalDays; label: string; icon: React.ComponentType<{ className?: string }> }> = [
+  const medalMeta: Array<{
+    days: MedalDays;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+  }> = [
     { days: 7, label: '7 días', icon: Award },
     { days: 30, label: '30 días', icon: CheckCircle2 },
     { days: 100, label: '100 días', icon: Crown },
@@ -60,17 +94,25 @@ export const HabitDetailModal: React.FC = () => {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-y-auto"
       role="dialog"
       aria-modal="true"
       aria-labelledby="habit-detail-title"
+      onClick={closeDetailModal}
     >
-      <div className="w-full max-w-xl bg-[#0b0b0b] border border-[#1c1c1c] rounded-2xl p-6 shadow-2xl space-y-5">
+      <div
+        className="w-full max-w-xl bg-[#0b0b0b] border border-[#1c1c1c] rounded-2xl p-5 sm:p-6 shadow-2xl space-y-5 my-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="flex items-start justify-between gap-4 pb-4 border-b border-[#1c1c1c]">
           <div>
-            <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-[#8a8a8a]">
+            <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wider text-[#8a8a8a]">
               <span>{entity.category}</span>
+              <span aria-hidden="true">·</span>
+              <span className={entity.habitType === 'evitar' ? 'text-amber-400 font-semibold' : ''}>
+                {entity.habitType === 'evitar' ? 'Evitar' : 'Construir'}
+              </span>
               <span aria-hidden="true">·</span>
               <span>Cadencia {entity.cadence}</span>
               <span aria-hidden="true">·</span>
@@ -89,6 +131,7 @@ export const HabitDetailModal: React.FC = () => {
                 openEditHabitModal(entity);
               }}
               title="Editar hábito"
+              aria-label="Editar hábito"
               className="p-2 rounded-xl bg-[#141414] border border-[#242424] hover:border-[#d8f23a] text-[#8a8a8a] hover:text-white transition-colors cursor-pointer"
             >
               <Pencil className="w-3.5 h-3.5" />
@@ -129,17 +172,56 @@ export const HabitDetailModal: React.FC = () => {
           </div>
         </div>
 
-        {/* Habit Medals */}
-        <div className="flex flex-wrap items-center justify-between gap-2 bg-[#121212] border border-[#1f1f1f] rounded-xl px-4 py-3">
+        {/* Last 30 Days Interactive Strip */}
+        <div className="bg-[#121212] border border-[#1f1f1f] rounded-xl p-3.5 space-y-2">
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="text-[#8a8a8a] font-medium">Últimos 30 días (clic para seleccionar)</span>
+            <span className="font-mono text-[#737373] tabular-nums">{selectedDate}</span>
+          </div>
+          <div className="grid grid-cols-10 sm:grid-cols-15 gap-1.5">
+            {last30Days.map((day) => {
+              const isSelected = day.date === selectedDate;
+              const bg =
+                day.status === 'hecho'
+                  ? 'bg-[#d8f23a] border-[#d8f23a]'
+                  : day.status === 'parcial'
+                  ? 'bg-[#465710] border-[#78911a]'
+                  : 'bg-[#1a1a1a] border-[#262626]';
+              return (
+                <button
+                  key={day.date}
+                  type="button"
+                  onClick={() => setSelectedDate(day.date)}
+                  title={`${day.date}: ${
+                    day.status === 'hecho' ? 'Hecho' : day.status === 'parcial' ? 'Parcial' : 'Vacío'
+                  }`}
+                  aria-label={`Seleccionar ${day.date}`}
+                  className={`h-5 rounded border transition-transform hover:scale-110 cursor-pointer ${bg} ${
+                    isSelected ? 'ring-2 ring-white' : ''
+                  }`}
+                />
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Habit Medals with Unlock Dates */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-[#121212] border border-[#1f1f1f] rounded-xl px-4 py-3">
           <span className="text-xs text-[#8a8a8a]">Medallas del hábito</span>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {medalMeta.map((m) => {
               const Icon = m.icon;
               const unlocked = stats.unlockedMedals.includes(m.days);
+              const unlockedDate = unlockedDateMap.get(m.days);
               return (
                 <span
                   key={m.days}
-                  className={`inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-lg border ${
+                  title={
+                    unlockedDate
+                      ? `Desbloqueada el ${unlockedDate}`
+                      : `Alcanza ${m.label} continuos`
+                  }
+                  className={`inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-lg border tabular-nums ${
                     unlocked
                       ? 'bg-[#161a08] border-[#34420e] text-[#d8f23a]'
                       : 'bg-[#0b0b0b] border-[#1c1c1c] text-[#4a4a4a]'
@@ -147,6 +229,11 @@ export const HabitDetailModal: React.FC = () => {
                 >
                   <Icon className="w-3.5 h-3.5" />
                   <span>{m.label}</span>
+                  {unlockedDate && (
+                    <span className="text-[10px] font-mono text-[#a3b82d]">
+                      · {unlockedDate.slice(5)}
+                    </span>
+                  )}
                 </span>
               );
             })}
@@ -210,6 +297,21 @@ export const HabitDetailModal: React.FC = () => {
                 className="w-full bg-[#0b0b0b] border border-[#242424] focus:border-[#d8f23a] text-white text-xs rounded-xl px-3 py-2 outline-none tabular-nums disabled:opacity-40"
               />
             </div>
+          </div>
+
+          <div>
+            <label htmlFor="detail-note" className="block text-[11px] text-[#8a8a8a] mb-1">
+              Nota del día (opcional)
+            </label>
+            <input
+              id="detail-note"
+              type="text"
+              maxLength={140}
+              value={noteInput}
+              onChange={(e) => setNoteInput(e.target.value)}
+              placeholder="Ej. Entrenamiento con poca energía pero cumplido, 2 capítulos..."
+              className="w-full bg-[#0b0b0b] border border-[#242424] focus:border-[#d8f23a] text-white text-xs rounded-xl px-3 py-2 outline-none"
+            />
           </div>
 
           <div className="flex justify-end">

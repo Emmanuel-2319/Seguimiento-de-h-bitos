@@ -14,9 +14,20 @@ import {
 } from 'recharts';
 import { TrendingDown, TrendingUp } from 'lucide-react';
 import { useStore } from '../hooks/useStore';
-import { calculateStreakProgressOverview } from '../utils/streak';
+import type { HabitCategory } from '../types';
+import {
+  calculateStreakProgressOverview,
+  type ProgressRangeDays,
+} from '../utils/streak';
 
 type ChartMode = 'evolucion' | 'comparativa';
+
+const RANGE_OPTIONS: Array<{ days: ProgressRangeDays; label: string }> = [
+  { days: 30, label: '30d' },
+  { days: 90, label: '3m' },
+  { days: 180, label: '6m' },
+  { days: 365, label: '1a' },
+];
 
 interface CustomTooltipPayloadItem {
   name?: string;
@@ -68,21 +79,37 @@ const DarkChartTooltip: React.FC<CustomTooltipProps> = ({
 export const ProgressOverview: React.FC = () => {
   const { entities, activities, today } = useStore();
   const [chartMode, setChartMode] = useState<ChartMode>('evolucion');
+  const [rangeDays, setRangeDays] = useState<ProgressRangeDays>(90);
+  const [scopeFilter, setScopeFilter] = useState<string>('todos');
 
-  const overview = useMemo(
-    () => calculateStreakProgressOverview(entities, activities, today),
-    [entities, activities, today]
-  );
+  const overview = useMemo(() => {
+    if (scopeFilter.startsWith('hab:')) {
+      return calculateStreakProgressOverview(entities, activities, today, {
+        rangeDays,
+        entityId: scopeFilter.slice(4),
+      });
+    }
+    const category =
+      scopeFilter.startsWith('cat:')
+        ? (scopeFilter.slice(4) as HabitCategory)
+        : 'todos';
+    return calculateStreakProgressOverview(entities, activities, today, {
+      rangeDays,
+      category,
+    });
+  }, [entities, activities, today, rangeDays, scopeFilter]);
 
   const isPositiveDelta = overview.deltaVsPrevPct >= 0;
+  const activeRangeLabel =
+    RANGE_OPTIONS.find((r) => r.days === rangeDays)?.label ?? '3m';
 
   return (
     <section
       aria-label="Resumen de progreso y comparativa trimestral"
       className="bg-[#0b0b0b] border border-[#1c1c1c] rounded-2xl p-5 sm:p-6 space-y-5"
     >
-      {/* Header & Mode Switch */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+      {/* Header & Controls */}
+      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
         <div>
           <div className="flex flex-wrap items-center gap-2.5">
             <h2 className="text-sm font-bold uppercase tracking-wider text-white">
@@ -107,33 +134,81 @@ export const ProgressOverview: React.FC = () => {
             </span>
           </div>
           <p className="text-xs text-[#8a8a8a] mt-1">
-            Suma histórica de días de racha de todos los hábitos y comparativa de los últimos 3 meses.
+            Filtra por categoría o hábito individual y analiza tu consistencia por ventana temporal.
           </p>
         </div>
 
-        <div className="flex items-center gap-1 bg-[#121212] border border-[#222222] rounded-xl p-1 self-start lg:self-auto shrink-0">
-          <button
-            type="button"
-            onClick={() => setChartMode('evolucion')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
-              chartMode === 'evolucion'
-                ? 'bg-[#d8f23a] text-black font-semibold'
-                : 'text-[#8a8a8a] hover:text-white'
-            }`}
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {/* Category / Habit Filter */}
+          <select
+            aria-label="Filtrar analítica por categoría o hábito"
+            value={scopeFilter}
+            onChange={(e) => setScopeFilter(e.target.value)}
+            className="bg-[#121212] border border-[#222222] focus:border-[#d8f23a] text-white text-xs rounded-xl px-3 py-1.5 outline-none max-w-[200px]"
           >
-            Evolución continua
-          </button>
-          <button
-            type="button"
-            onClick={() => setChartMode('comparativa')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
-              chartMode === 'comparativa'
-                ? 'bg-[#d8f23a] text-black font-semibold'
-                : 'text-[#8a8a8a] hover:text-white'
-            }`}
-          >
-            Superponer 3 meses
-          </button>
+            <option value="todos">Todos los hábitos</option>
+            <optgroup label="Por categoría">
+              <option value="cat:salud">Categoría: Salud</option>
+              <option value="cat:estudio">Categoría: Estudio</option>
+              <option value="cat:trabajo">Categoría: Trabajo</option>
+              <option value="cat:personal">Categoría: Personal</option>
+            </optgroup>
+            {entities.length > 0 && (
+              <optgroup label="Hábito individual">
+                {entities.map((ent) => (
+                  <option key={ent.id} value={`hab:${ent.id}`}>
+                    {ent.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+
+          {/* Range Switcher (only relevant for evolucion, kept accessible) */}
+          {chartMode === 'evolucion' && (
+            <div className="flex items-center gap-0.5 bg-[#121212] border border-[#222222] rounded-xl p-1">
+              {RANGE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.days}
+                  type="button"
+                  onClick={() => setRangeDays(opt.days)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                    rangeDays === opt.days
+                      ? 'bg-[#20260b] text-[#d8f23a] font-semibold'
+                      : 'text-[#8a8a8a] hover:text-white'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Chart Mode Switch */}
+          <div className="flex items-center gap-1 bg-[#121212] border border-[#222222] rounded-xl p-1">
+            <button
+              type="button"
+              onClick={() => setChartMode('evolucion')}
+              className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                chartMode === 'evolucion'
+                  ? 'bg-[#d8f23a] text-black font-semibold'
+                  : 'text-[#8a8a8a] hover:text-white'
+              }`}
+            >
+              Evolución
+            </button>
+            <button
+              type="button"
+              onClick={() => setChartMode('comparativa')}
+              className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                chartMode === 'comparativa'
+                  ? 'bg-[#d8f23a] text-black font-semibold'
+                  : 'text-[#8a8a8a] hover:text-white'
+              }`}
+            >
+              Superponer 3 meses
+            </button>
+          </div>
         </div>
       </div>
 
@@ -144,7 +219,7 @@ export const ProgressOverview: React.FC = () => {
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-semibold text-white">
               {chartMode === 'evolucion'
-                ? 'Suma diaria de rachas activas (últimos 3 meses)'
+                ? `Suma diaria de rachas activas (${activeRangeLabel})`
                 : 'Comparativa día a día (1–31) entre los últimos 3 meses'}
             </span>
             <span className="text-xs text-[#8a8a8a] tabular-nums">

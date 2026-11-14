@@ -71,7 +71,8 @@ export function isExpectedOccurrence(
   dateStr: LocalDate,
   cadence: CadenceType,
   startDate: LocalDate,
-  endDate?: LocalDate
+  endDate?: LocalDate,
+  customDays?: number[]
 ): boolean {
   if (dateStr < startDate) return false;
   if (endDate && dateStr > endDate) return false;
@@ -83,6 +84,9 @@ export function isExpectedOccurrence(
   }
   if (cadence === 'semanal') {
     return dow === getDayOfWeek(startDate);
+  }
+  if (cadence === 'personalizado') {
+    return customDays && customDays.length > 0 ? customDays.includes(dow) : true;
   }
   return true;
 }
@@ -115,6 +119,31 @@ const MONTHS_ES = [
   'Octubre',
   'Noviembre',
   'Diciembre',
+];
+
+export const SHORT_MONTHS_ES = [
+  'Ene',
+  'Feb',
+  'Mar',
+  'Abr',
+  'May',
+  'Jun',
+  'Jul',
+  'Ago',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dic',
+];
+
+export const WEEKDAY_PILLS_ES: Array<{ dow: number; short: string; label: string }> = [
+  { dow: 1, short: 'L', label: 'Lunes' },
+  { dow: 2, short: 'M', label: 'Martes' },
+  { dow: 3, short: 'X', label: 'Miércoles' },
+  { dow: 4, short: 'J', label: 'Jueves' },
+  { dow: 5, short: 'V', label: 'Viernes' },
+  { dow: 6, short: 'S', label: 'Sábado' },
+  { dow: 0, short: 'D', label: 'Domingo' },
 ];
 
 const WEEKDAYS_SHORT_ES = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];

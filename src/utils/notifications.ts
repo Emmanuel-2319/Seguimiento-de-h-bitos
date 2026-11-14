@@ -91,7 +91,7 @@ export function getPendingHabitsForDate(
 
   return entities.filter(
     (e) =>
-      isExpectedOccurrence(date, e.cadence, e.startDate, e.endDate) &&
+      isExpectedOccurrence(date, e.cadence, e.startDate, e.endDate, e.customDays) &&
       !doneSet.has(e.id)
   );
 }
@@ -102,11 +102,11 @@ const RACHA_BADGE_SVG =
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#d8f23a"/><path d="M36 12L18 35h13l-3 17 18-23H33l3-17z" fill="#000000"/></svg>'
   );
 
-export function sendPendingHabitsNotification(params: {
+export async function sendPendingHabitsNotification(params: {
   pendingHabits: Entity[];
   today: LocalDate;
   isTest?: boolean;
-}): boolean {
+}): Promise<boolean> {
   if (!isNotificationSupported() || window.Notification.permission !== 'granted') {
     return false;
   }
@@ -133,11 +133,33 @@ export function sendPendingHabitsNotification(params: {
     body = `No rompas tu racha (${today}): ${names}${extra}.`;
   }
 
+  const tag = isTest ? `racha-test-${Date.now()}` : `racha-daily-${today}`;
+
+  try {
+    if ('serviceWorker' in navigator) {
+      const registration = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200)),
+      ]);
+      if (registration && 'showNotification' in registration) {
+        await registration.showNotification(title, {
+          body,
+          icon: RACHA_BADGE_SVG,
+          badge: RACHA_BADGE_SVG,
+          tag,
+        });
+        return true;
+      }
+    }
+  } catch {
+    // Fallback to standard window.Notification below
+  }
+
   try {
     const notification = new window.Notification(title, {
       body,
       icon: RACHA_BADGE_SVG,
-      tag: isTest ? `racha-test-${Date.now()}` : `racha-daily-${today}`,
+      tag,
     });
     notification.onclick = () => {
       window.focus();

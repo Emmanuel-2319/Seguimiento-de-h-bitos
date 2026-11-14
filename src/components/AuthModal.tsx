@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Check, Copy, KeyRound, ShieldCheck, X } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Check, Copy, Eye, EyeOff, KeyRound, ShieldCheck, X } from 'lucide-react';
 import { useStore } from '../hooks/useStore';
 
 type AuthTab = 'login' | 'register' | 'recover';
@@ -24,8 +24,7 @@ export const AuthModal: React.FC = () => {
   // Critical post-registration recovery key confirmation screen
   const [generatedRecoveryKey, setGeneratedRecoveryKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-
-  if (!isAuthModalOpen) return null;
+  const [showPassword, setShowPassword] = useState(false);
 
   const resetAndClose = () => {
     setError(null);
@@ -34,6 +33,19 @@ export const AuthModal: React.FC = () => {
     setRecoveryInput('');
     closeAuthModal();
   };
+
+  useEffect(() => {
+    if (!isAuthModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !generatedRecoveryKey) {
+        resetAndClose();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isAuthModalOpen, generatedRecoveryKey]);
+
+  if (!isAuthModalOpen) return null;
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -93,8 +105,14 @@ export const AuthModal: React.FC = () => {
       role="dialog"
       aria-modal="true"
       aria-labelledby="auth-modal-title"
+      onClick={() => {
+        if (!generatedRecoveryKey) resetAndClose();
+      }}
     >
-      <div className="w-full max-w-md bg-[#0b0b0b] border border-[#1c1c1c] rounded-2xl p-6 shadow-2xl">
+      <div
+        className="w-full max-w-md bg-[#0b0b0b] border border-[#1c1c1c] rounded-2xl p-6 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Critical Screen: 12-Character Recovery Key After Registration */}
         {generatedRecoveryKey ? (
           <div className="space-y-5">
@@ -239,15 +257,25 @@ export const AuthModal: React.FC = () => {
                   <label htmlFor="login-pass" className="block text-xs text-[#8a8a8a] mb-1">
                     Contraseña
                   </label>
-                  <input
-                    id="login-pass"
-                    type="password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full bg-[#121212] border border-[#242424] focus:border-[#d8f23a] text-white text-xs rounded-xl px-3.5 py-2.5 outline-none"
-                  />
+                  <div className="relative">
+                    <input
+                      id="login-pass"
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full bg-[#121212] border border-[#242424] focus:border-[#d8f23a] text-white text-xs rounded-xl pl-3.5 pr-10 py-2.5 outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((v) => !v)}
+                      aria-label={showPassword ? 'Ocultar contraseña' : 'Ver contraseña'}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#8a8a8a] hover:text-white cursor-pointer"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
                 </div>
                 <button
                   type="submit"
@@ -292,16 +320,26 @@ export const AuthModal: React.FC = () => {
                   <label htmlFor="reg-pass" className="block text-xs text-[#8a8a8a] mb-1">
                     Contraseña
                   </label>
-                  <input
-                    id="reg-pass"
-                    type="password"
-                    required
-                    minLength={4}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Mínimo 4 caracteres"
-                    className="w-full bg-[#121212] border border-[#242424] focus:border-[#d8f23a] text-white text-xs rounded-xl px-3.5 py-2.5 outline-none"
-                  />
+                  <div className="relative">
+                    <input
+                      id="reg-pass"
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      minLength={4}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="Mínimo 4 caracteres"
+                      className="w-full bg-[#121212] border border-[#242424] focus:border-[#d8f23a] text-white text-xs rounded-xl pl-3.5 pr-10 py-2.5 outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((v) => !v)}
+                      aria-label={showPassword ? 'Ocultar contraseña' : 'Ver contraseña'}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#8a8a8a] hover:text-white cursor-pointer"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
                 </div>
                 <button
                   type="submit"
